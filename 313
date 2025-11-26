@@ -1,0 +1,36 @@
+// Data Model for a Single Task
+data class DailyTask(
+    val id: String,
+    val title: String,
+    val isRoutine: Boolean, // آیا روتین است یا خیر
+    var isCompleted: Boolean = false,
+    var reminderTime: String? = null, // هشدار
+    var numericalMetric: Double? = null, // مقدار عددی گزارش
+    var completionNote: String? = null // یادداشت متنی گزارش
+)
+
+// List of all tasks for the current date
+val todayTasks = listOf(
+    // روتین
+    DailyTask(
+        id = "R1", 
+        title = "ورزش صبحگاهی (۳۰ دقیقه)", 
+        isRoutine = true, 
+        numericalMetric = 30.0
+    ),
+    // تسک متغیر
+    DailyTask(
+        id = "T2", 
+        title = "نهایی کردن طرح اولیه اپ", 
+        isRoutine = false, 
+        isCompleted = true,
+        completionNote = "طرح UI صفحه اصلی نهایی شد."
+    )
+    // ... سایر تسک‌ها
+)
+
+// Data Model for the Day's Journal Entry
+data class DailyJournal(
+    val date: String,
+    var content: String
+)
