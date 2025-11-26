@@ -1,36 +1,621 @@
-// Data Model for a Single Task
-data class DailyTask(
-    val id: String,
-    val title: String,
-    val isRoutine: Boolean, // آیا روتین است یا خیر
-    var isCompleted: Boolean = false,
-    var reminderTime: String? = null, // هشدار
-    var numericalMetric: Double? = null, // مقدار عددی گزارش
-    var completionNote: String? = null // یادداشت متنی گزارش
-)
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>خودساز - مدیریت برنامه روزانه</title>
+    <!-- Tailwind CSS CDN for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Firebase SDK Imports (MUST be 'module' type) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-// List of all tasks for the current date
-val todayTasks = listOf(
-    // روتین
-    DailyTask(
-        id = "R1", 
-        title = "ورزش صبحگاهی (۳۰ دقیقه)", 
-        isRoutine = true, 
-        numericalMetric = 30.0
-    ),
-    // تسک متغیر
-    DailyTask(
-        id = "T2", 
-        title = "نهایی کردن طرح اولیه اپ", 
-        isRoutine = false, 
-        isCompleted = true,
-        completionNote = "طرح UI صفحه اصلی نهایی شد."
-    )
-    // ... سایر تسک‌ها
-)
+        // Global variables provided by the environment (MANDATORY USE)
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-// Data Model for the Day's Journal Entry
-data class DailyJournal(
-    val date: String,
-    var content: String
-)
+        // Define global variables for Firebase access (attached to window for global access)
+        window.app = initializeApp(firebaseConfig);
+        window.db = getFirestore(window.app);
+        window.auth = getAuth(window.app);
+        
+        // Firestore path helpers
+        window.getDailyDocRef = (userId, dateKey) => doc(window.db, `artifacts/${appId}/users/${userId}/dailyPlans`, dateKey);
+
+        // Authentication and Data Listener Setup
+        onAuthStateChanged(window.auth, async (user) => {
+            if (!user) {
+                // Sign in anonymously if no token is available
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(window.auth, initialAuthToken);
+                        console.log("Signed in with custom token.");
+                    } else {
+                        await signInAnonymously(window.auth);
+                        console.log("Signed in anonymously.");
+                    }
+                } catch (error) {
+                    console.error("Authentication error, attempting anonymous sign-in:", error);
+                    await signInAnonymously(window.auth);
+                }
+            }
+            // Once authenticated, load the user's data
+            window.userId = window.auth.currentUser?.uid || 'anonymous';
+            document.getElementById('user-id-display').textContent = `شناسه کاربر: ${window.userId}`;
+            window.loadDailyData();
+        });
+    </script>
+    
+    <!-- Custom Tailwind Configuration for Persian fonts and colors -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-blue': '#3B82F6',
+                        'success-mint': '#10B981',
+                        'bg-light': '#F9FAFB',
+                        'card-bg': '#FFFFFF',
+                        'text-dark': '#1F2937',
+                        'warning-orange': '#F59E0B'
+                    },
+                    fontFamily: {
+                        'sans': ['Vazirmatn', 'Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Base styles for the mobile view simulation */
+        body {
+            font-family: 'sans';
+            background-color: #F9FAFB;
+            display: flex;
+            justify-content: center;
+            padding: 0;
+            margin: 0;
+        }
+
+        /* Simulating the mobile screen container */
+        .mobile-container {
+            width: 100%;
+            max-width: 420px; /* Typical large mobile width */
+            min-height: 100vh;
+            background-color: #F9FAFB;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        /* Card Style */
+        .app-card {
+            background-color: #FFFFFF;
+            border-radius: 1.5rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            padding: 1.25rem;
+        }
+
+        /* Custom Checkbox/Toggle Button Style */
+        .task-toggle {
+            transition: all 0.3s ease;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            border: 2px solid #D1D5DB;
+            flex-shrink: 0;
+        }
+        .task-toggle.completed {
+            background-color: #10B981; /* success-mint */
+            border-color: #10B981;
+            color: #FFFFFF;
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-bg-light">
+
+<div class="mobile-container p-4 pb-20">
+    
+    <!-- Header and Date Section -->
+    <header class="mb-6">
+        <div class="flex justify-between items-center mb-2">
+            <h1 class="text-3xl font-bold text-text-dark">خودساز</h1>
+            <div class="flex space-x-3 rtl:space-x-reverse">
+                <!-- Notifications Bell Icon (Placeholder) -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-text-dark/70"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.375 19.375a2 2 0 1 0 3.25 0"/></svg>
+                <!-- Profile Icon (Placeholder) -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-text-dark/70"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+        </div>
+        <div class="text-text-dark/80">
+            <!-- User ID for debugging/sharing -->
+            <p id="user-id-display" class="text-xs text-gray-400 mb-1">...</p>
+            <p class="text-xl font-semibold">چهارشنبه، ۲۶ آبان ۱۴۰۴</p>
+            <p class="text-sm text-primary-blue/70 mt-1">مناسبت: روز کتاب و کتابخوانی</p>
+        </div>
+    </header>
+
+    <!-- 1. Routines and Habits Card -->
+    <div class="app-card mb-6 fade-in">
+        <h2 class="text-lg font-bold text-text-dark mb-4 flex items-center">
+            <span class="text-2xl ml-2">✨</span> روتین‌های روزانه
+        </h2>
+        <div id="routines-list" class="space-y-3">
+            <p class="text-gray-400 text-sm text-center py-4">در حال بارگذاری...</p>
+        </div>
+    </div>
+
+    <!-- 2. Specific Tasks for Today Card -->
+    <div class="app-card mb-6 fade-in" style="animation-delay: 0.1s;">
+        <h2 class="text-lg font-bold text-text-dark mb-4 flex items-center">
+            <span class="text-2xl ml-2">🗓</span> برنامه‌های خاص امروز
+        </h2>
+        <div id="tasks-list" class="space-y-3">
+             <p class="text-gray-400 text-sm text-center py-4">در حال بارگذاری...</p>
+        </div>
+        
+        <!-- Add New Task Button (Mocked) -->
+        <button class="w-full text-center text-primary-blue/80 border-2 border-primary-blue/30 border-dashed rounded-xl py-3 mt-4 hover:bg-primary-blue/5 transition duration-200" onclick="showCustomAlert('قابلیت افزودن تسک در این نسخه اولیه فعال نیست.')">
+            + افزودن برنامه جدید
+        </button>
+    </div>
+
+    <!-- 3. Daily Journal Card -->
+    <div class="app-card mb-6 fade-in" style="animation-delay: 0.2s;">
+        <h2 class="text-lg font-bold text-text-dark mb-4 flex items-center">
+            <span class="text-2xl ml-2">💭</span> یادداشت روزانه
+        </h2>
+        <textarea id="daily-journal" rows="5" placeholder="احساس کلی امروزت چه بود؟ مهم‌ترین درسی که گرفتی؟" class="w-full p-3 border border-gray-200 rounded-lg focus:ring-primary-blue focus:border-primary-blue transition resize-none"></textarea>
+        <p class="text-xs text-gray-500 mt-1 text-left" id="journal-status">...</p>
+    </div>
+    
+    <!-- 4. Growth Coach Card (Gemini LLM Feature) -->
+    <div class="app-card mb-6 fade-in" style="animation-delay: 0.3s;">
+        <h2 class="text-lg font-bold text-text-dark mb-4 flex items-center">
+            <span class="text-2xl ml-2">🧠</span> مربی رشد
+        </h2>
+        
+        <div id="llm-analysis-output" class="text-gray-600 min-h-[50px] p-4 rounded-xl border border-dashed border-primary-blue/30 bg-primary-blue/5 flex items-center justify-center text-center leading-loose">
+            <p>پس از انجام برنامه‌ها و ثبت یادداشت، تحلیل روزانه خود را دریافت کنید.</p>
+        </div>
+
+        <button onclick="triggerAnalysis()" id="analysis-button" class="w-full text-center bg-primary-blue text-white rounded-xl py-3 mt-4 hover:bg-primary-blue/90 transition duration-200 shadow-md flex items-center justify-center disabled:opacity-50" disabled>
+            <svg id="analysis-loading" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            <span id="analysis-text">✨ دریافت تحلیل و پیشنهاد رشد</span>
+        </button>
+    </div>
+    
+    <!-- Custom Alert/Modal for replacing alert() -->
+    <div id="custom-alert" class="fixed inset-0 bg-black bg-opacity-40 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+        <div class="app-card w-full max-w-xs p-5 text-center">
+            <p id="alert-message" class="text-lg font-semibold text-text-dark mb-4">پیام</p>
+            <button onclick="closeCustomAlert()" class="px-4 py-2 bg-primary-blue text-white rounded-lg hover:bg-primary-blue/90 transition">متوجه شدم</button>
+        </div>
+    </div>
+    
+    <!-- Report Modal -->
+    <div id="report-modal" class="fixed inset-0 bg-black bg-opacity-40 backdrop-blur-sm hidden items-center justify-center p-4 z-50 transition-opacity duration-300">
+        <div class="app-card w-full max-w-sm p-6">
+            <h3 id="modal-title" class="text-xl font-bold mb-4 text-text-dark">ثبت گزارش برای [عنوان تسک]</h3>
+            
+            <label for="numerical-metric" class="block text-sm font-medium text-gray-700 mb-1">مقدار عددی (مثلاً: دقیقه، کیلومتر، صفحه)</label>
+            <input type="number" id="numerical-metric" placeholder="مقدار را وارد کنید (اختیاری)" class="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-primary-blue focus:border-primary-blue transition" />
+            
+            <label for="completion-note" class="block text-sm font-medium text-gray-700 mb-1">یادداشت کوتاه (نکته یا چالش)</label>
+            <textarea id="completion-note" rows="3" placeholder="مهم‌ترین نکته یا چالش این تسک را بنویسید..." class="w-full p-3 border border-gray-300 rounded-lg mb-6 focus:ring-primary-blue focus:border-primary-blue transition resize-none"></textarea>
+
+            <div class="flex justify-end space-x-3 rtl:space-x-reverse">
+                <button onclick="closeModal()" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition">انصراف</button>
+                <button onclick="saveReport()" class="px-4 py-2 bg-success-mint text-white rounded-lg hover:bg-success-mint/90 transition">ثبت گزارش</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Bottom Navigation Bar Simulation -->
+    <nav class="fixed bottom-0 left-0 right-0 max-w-[420px] mx-auto h-16 bg-white border-t border-gray-200 flex justify-around items-center rounded-t-xl shadow-2xl z-40">
+        <a href="#" class="flex flex-col items-center text-primary-blue">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            <span class="text-xs mt-1">امروز</span>
+        </a>
+        <a href="#" class="flex flex-col items-center text-gray-400 hover:text-primary-blue/80">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="m17 21-2-2-2 2"/><path d="M17 17l2 2 2-2"/></svg>
+            <span class="text-xs mt-1">تقویم/گزارش</span>
+        </a>
+        <a href="#" class="flex flex-col items-center text-gray-400 hover:text-primary-blue/80">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/><polyline points="10 10 16 10"/><polyline points="10 14 16 14"/></svg>
+            <span class="text-xs mt-1">دفترچه</span>
+        </a>
+        <a href="#" class="flex flex-col items-center text-gray-400 hover:text-primary-blue/80">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 0 0-4 0L7 13 3 21l8-4 10-10.2A2.85 2.85 0 0 0 17 3Z"/></svg>
+            <span class="text-xs mt-1">مسیر رشد</span>
+        </a>
+    </nav>
+</div>
+
+<script>
+    // --- Global Variables and Constants ---
+    
+    // Default data structure for a new day. This is the template for daily goals.
+    const DEFAULT_DAILY_DATA = {
+        routines: [
+            { id: 1, title: "ورزش صبحگاهی", isRoutine: true, isCompleted: false, metricName: "دقیقه", defaultMetric: 30, numericalMetric: null, completionNote: null },
+            { id: 2, title: "مطالعه کتاب (۲۰ صفحه)", isRoutine: true, isCompleted: false, metricName: "صفحه", defaultMetric: 20, numericalMetric: null, completionNote: null },
+            { id: 3, title: "مدیتیشن (۱۰ دقیقه)", isRoutine: true, isCompleted: false, metricName: "دقیقه", defaultMetric: 10, numericalMetric: null, completionNote: null },
+        ],
+        tasks: [
+            { id: 101, title: "تکمیل گزارش فصلی", isRoutine: false, isCompleted: false, hasReminder: true, numericalMetric: null, completionNote: null, metricName: "ساعت", defaultMetric: 2 },
+            { id: 102, title: "تماس با مشاور مالی", isRoutine: false, isCompleted: false, hasReminder: false, numericalMetric: null, completionNote: null, metricName: "ساعت", defaultMetric: 1 },
+            { id: 103, title: "برنامه‌ریزی برای پروژه بعدی", isRoutine: false, isCompleted: false, hasReminder: false, numericalMetric: null, completionNote: null, metricName: "دقیقه", defaultMetric: 60 },
+        ],
+        journal: '',
+        analysis: null
+    };
+
+    let dailyData = { ...DEFAULT_DAILY_DATA }; // Current day's data, updated from Firestore
+    let currentTask = null; // Stores the task object currently being edited in the modal
+    const fixedDateKey = '1404-08-26'; // Fixed date key for Firestore document (for this demo)
+    
+    // Gemini API Configuration
+    const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
+    const apiKey = ""; // API Key will be automatically handled by the environment
+
+
+    // --- DOM Elements ---
+    const routinesList = document.getElementById('routines-list');
+    const tasksList = document.getElementById('tasks-list');
+    const reportModal = document.getElementById('report-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const numericalInput = document.getElementById('numerical-metric');
+    const noteInput = document.getElementById('completion-note');
+    const journalInput = document.getElementById('daily-journal');
+    const journalStatus = document.getElementById('journal-status');
+    const analysisOutput = document.getElementById('llm-analysis-output');
+    const analysisButton = document.getElementById('analysis-button');
+    const analysisLoading = document.getElementById('analysis-loading');
+    const analysisTextSpan = document.getElementById('analysis-text');
+
+
+    // --- Custom Alert Implementation (replaces alert()) ---
+
+    function showCustomAlert(message) {
+        document.getElementById('alert-message').textContent = message;
+        document.getElementById('custom-alert').classList.remove('hidden');
+        document.getElementById('custom-alert').classList.add('flex');
+    }
+
+    function closeCustomAlert() {
+        document.getElementById('custom-alert').classList.remove('flex');
+        document.getElementById('custom-alert').classList.add('hidden');
+    }
+
+
+    // --- Data Persistence (Firestore) ---
+
+    /**
+     * Saves the current task/routine list and journal to Firestore.
+     */
+    async function saveData(updateKey, value) {
+        if (!window.userId || !window.db) return;
+        
+        try {
+            const docRef = window.getDailyDocRef(window.userId, fixedDateKey);
+            
+            let updatePayload = {
+                lastUpdate: new Date().toISOString()
+            };
+            
+            if (updateKey === 'all') {
+                updatePayload = { ...updatePayload, ...value };
+            } else {
+                updatePayload[updateKey] = value;
+            }
+
+            await setDoc(docRef, updatePayload, { merge: true });
+            if (updateKey === 'journal') {
+                journalStatus.textContent = "ذخیره شد.";
+            }
+        } catch (e) {
+            console.error("Error saving document: ", e);
+            journalStatus.textContent = "خطا در ذخیره سازی!";
+        }
+    }
+
+    /**
+     * Loads the daily data using an onSnapshot listener for real-time updates.
+     */
+    window.loadDailyData = () => {
+        if (!window.userId || !window.db) return; // Wait for authentication
+        
+        const docRef = window.getDailyDocRef(window.userId, fixedDateKey);
+        
+        onSnapshot(docRef, (docSnap) => {
+            let initialLoad = true;
+            if (docSnap.exists()) {
+                const fetchedData = docSnap.data();
+                // Check if the fetched data is significantly different from default (i.e., not just the initial setDoc call)
+                if (JSON.stringify(fetchedData.routines) !== JSON.stringify(DEFAULT_DAILY_DATA.routines)) {
+                    initialLoad = false;
+                }
+                dailyData = { ...DEFAULT_DAILY_DATA, ...fetchedData };
+            } else {
+                // If the document doesn't exist, set the default data (only for a clean start)
+                if (initialLoad) {
+                    saveData('all', DEFAULT_DAILY_DATA);
+                }
+                dailyData = DEFAULT_DAILY_DATA;
+            }
+            
+            // Update UI
+            renderTasks();
+            updateJournalUI();
+            updateAnalysisUI();
+            analysisButton.disabled = false; // Enable the button once data is loaded/initialized
+        }, (error) => {
+            console.error("Error listening to document:", error);
+            routinesList.innerHTML = `<p class="text-red-500 text-sm text-center py-4">خطا در بارگذاری داده‌ها.</p>`;
+            tasksList.innerHTML = `<p class="text-red-500 text-sm text-center py-4">خطا در بارگذاری داده‌ها.</p>`;
+        });
+    };
+    
+    // --- Rendering Functions ---
+
+    /**
+     * Creates the HTML structure for a single task item.
+     */
+    function createTaskHtml(task) {
+        const completedClass = task.isCompleted ? 'completed' : '';
+        const reportIcon = (task.numericalMetric || task.completionNote) ? 
+                            `<span class="mr-2 text-primary-blue/80 font-bold" title="گزارش ثبت شده است">📝</span>` : '';
+        const reminderIcon = task.hasReminder ? 
+                             `<span class="text-warning-orange mr-2" title="هشدار تنظیم شده است">🔔</span>` : '';
+        const lineThroughClass = task.isCompleted ? 'line-through text-gray-500' : 'text-text-dark';
+        
+        return `
+            <div class="flex items-center p-3 rounded-xl hover:bg-bg-light/80 transition duration-150 border-b last:border-b-0 border-gray-100">
+                
+                <!-- Toggle/Checkbox -->
+                <div 
+                    class="task-toggle ${completedClass}" 
+                    data-id="${task.id}" 
+                    data-routine="${task.isRoutine}" 
+                    onclick="toggleTask(${task.id}, ${task.isRoutine})">
+                    ${task.isCompleted ? '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
+                </div>
+
+                <!-- Task Details (Clickable for report editing) -->
+                <div class="flex-1 mr-3 cursor-pointer" onclick="toggleTask(${task.id}, ${task.isRoutine})">
+                    <p class="text-base font-medium ${lineThroughClass}">
+                        ${task.title}
+                    </p>
+                    <div class="text-sm text-gray-400 mt-0.5">
+                        ${task.isCompleted ? `<span class="text-success-mint ml-2">انجام شد</span>` : 'در انتظار انجام'}
+                        ${task.numericalMetric ? ` - ${task.numericalMetric} ${task.metricName || ''}` : ''}
+                    </div>
+                </div>
+
+                <!-- Icons (Reminder/Report) -->
+                <div class="flex items-center text-gray-500 text-lg flex-shrink-0">
+                    ${reminderIcon}
+                    ${reportIcon}
+                </div>
+            </div>
+        `;
+    }
+
+    /**
+     * Renders the lists of routines and tasks.
+     */
+    function renderTasks() {
+        routinesList.innerHTML = dailyData.routines.length > 0 ? 
+                                dailyData.routines.map(createTaskHtml).join('') :
+                                '<p class="text-gray-400 text-sm text-center py-4">روتینی برای امروز تعریف نشده است.</p>';
+
+        tasksList.innerHTML = dailyData.tasks.length > 0 ? 
+                              dailyData.tasks.map(createTaskHtml).join('') :
+                              '<p class="text-gray-400 text-sm text-center py-4">برنامه خاصی برای امروز ندارید.</p>';
+    }
+
+    /**
+     * Updates the journal textarea and status.
+     */
+    function updateJournalUI() {
+        journalInput.value = dailyData.journal || '';
+        journalInput.oninput = saveJournal;
+        journalStatus.textContent = dailyData.journal ? "یادداشت شما به صورت خودکار ذخیره شده است." : "با نوشتن، ذخیره سازی خودکار انجام می‌شود.";
+    }
+    
+    /**
+     * Updates the analysis output box.
+     */
+    function updateAnalysisUI() {
+        if (dailyData.analysis) {
+            analysisOutput.innerHTML = `<p>${dailyData.analysis}</p>`;
+        } else {
+            analysisOutput.innerHTML = `<p>پس از انجام برنامه‌ها و ثبت یادداشت، تحلیل روزانه خود را دریافت کنید.</p>`;
+        }
+    }
+
+
+    // --- Modal Logic ---
+
+    /**
+     * Opens the report modal for a specific task.
+     */
+    function openModal(task) {
+        currentTask = task;
+        const list = task.isRoutine ? dailyData.routines : dailyData.tasks;
+        const item = list.find(t => t.id === task.id);
+        
+        modalTitle.textContent = `ثبت گزارش برای: ${item.title}`;
+        
+        const metricName = item.metricName || 'مقدار';
+        const defaultValue = item.defaultMetric !== undefined ? item.defaultMetric : '';
+        
+        const metricLabel = document.querySelector('label[for="numerical-metric"]');
+        metricLabel.textContent = `مقدار عددی (${metricName} - اختیاری)`;
+
+        numericalInput.value = item.numericalMetric !== null ? item.numericalMetric : defaultValue;
+        noteInput.value = item.completionNote || '';
+
+        reportModal.classList.remove('hidden');
+        reportModal.classList.add('flex');
+    }
+
+    /**
+     * Closes the report modal.
+     */
+    function closeModal() {
+        reportModal.classList.remove('flex');
+        reportModal.classList.add('hidden');
+        currentTask = null;
+    }
+
+    /**
+     * Saves the report data back to the current task and updates Firestore.
+     */
+    function saveReport() {
+        if (!currentTask) return;
+
+        const listKey = currentTask.isRoutine ? 'routines' : 'tasks';
+        const list = currentTask.isRoutine ? dailyData.routines : dailyData.tasks;
+        const item = list.find(t => t.id === currentTask.id);
+        
+        item.numericalMetric = parseFloat(numericalInput.value) || null;
+        item.completionNote = noteInput.value.trim() || null;
+        item.isCompleted = true; // Mark as completed upon saving the report
+
+        closeModal();
+        renderTasks();
+        saveData(listKey, list);
+    }
+
+
+    // --- Task Interaction Logic ---
+    
+    /**
+     * Handles clicking the toggle button and manages reporting.
+     */
+    function toggleTask(id, isRoutine) {
+        const listKey = isRoutine ? 'routines' : 'tasks';
+        const list = isRoutine ? dailyData.routines : dailyData.tasks;
+        const task = list.find(t => t.id === id);
+
+        // A task should always open the modal the first time to ensure reporting
+        if (!task.isCompleted) {
+            openModal(task);
+        } else {
+            // If completed, un-complete it
+            task.isCompleted = false;
+            // Optionally clear report on un-completion, or leave it for reference
+            // task.numericalMetric = null; 
+            // task.completionNote = null;
+            saveData(listKey, list);
+        }
+
+        renderTasks();
+    }
+    
+    /**
+     * Saves the journal entry to Firestore.
+     */
+    function saveJournal() {
+        const content = journalInput.value.trim();
+        dailyData.journal = content;
+        journalStatus.textContent = "در حال ذخیره...";
+        // Simple delay for saving (Debounce simulation)
+        setTimeout(() => saveData('journal', content), 500); 
+    }
+    
+    // --- Gemini LLM Integration ---
+
+    /**
+     * Calls the Gemini API to get a daily analysis and growth suggestion.
+     */
+    window.triggerAnalysis = async function() {
+        if (analysisButton.disabled) return;
+        
+        analysisButton.disabled = true;
+        analysisLoading.classList.remove('hidden');
+        analysisTextSpan.textContent = 'در حال تحلیل...';
+        analysisOutput.innerHTML = `<p class="text-center text-primary-blue/70">در حال تحلیل داده‌های شما توسط مربی هوش مصنوعی...</p>`;
+
+        const systemPrompt = "شما یک مربی و تحلیلگر رشد فردی (Personal Growth Coach and Analyst) هستید. لحن شما باید بسیار حمایتی، مثبت و الهام‌بخش باشد. بر اساس داده‌های فعالیت و یادداشت روزانه کاربر، یک پاراگراف کوتاه شامل این موارد بنویسید: ۱. یک تمجید کوتاه و مثبت درباره دستاوردها، ۲. تحلیل کنید که چه چیزی مانع پیشرفت شده است (اگر کاری ناتمام است، اما با لحن مثبت)، و ۳. یک پیشنهاد کوچک و قابل اجرا برای بهبود روز آینده ارائه دهید. پاسخ باید کاملاً به زبان فارسی و کمتر از ۷۰ کلمه باشد.";
+
+        const taskSummary = [...dailyData.routines, ...dailyData.tasks].map(item => {
+            let status = item.isCompleted ? 'کامل' : 'ناقص';
+            let report = item.numericalMetric ? ` - مقدار: ${item.numericalMetric} ${item.metricName}` : '';
+            if (item.completionNote) report += ` (یادداشت: ${item.completionNote})`;
+            return `${item.title} (${status})${report}`;
+        }).join('؛ ');
+
+        const prompt = `اطلاعات روزانه:
+        فعالیت‌ها: ${taskSummary}
+        یادداشت روزانه: ${dailyData.journal || 'یادداشتی ثبت نشده است.'}
+        
+        بر اساس این اطلاعات، تحلیل خود را ارائه دهید.`;
+        
+        const payload = {
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+        };
+
+        let analysisResult = "متاسفانه، به دلیل خطا در ارتباط با مربی هوش مصنوعی، نتوانستیم تحلیل را دریافت کنیم. لطفاً دوباره تلاش کنید.";
+        
+        // Exponential backoff retry mechanism
+        for (let i = 0; i < 3; i++) {
+            try {
+                const response = await fetch(`${API_URL}?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (text) {
+                    analysisResult = text;
+                    dailyData.analysis = analysisResult;
+                    await saveData('analysis', analysisResult); // Save the analysis result
+                    break; 
+                }
+            } catch (error) {
+                console.error(`Attempt ${i + 1} failed:`, error);
+                if (i < 2) await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000)); // Wait before retry
+            }
+        }
+        
+        // Update UI with the final result
+        analysisOutput.innerHTML = `<p class="fade-in">${analysisResult}</p>`;
+        analysisLoading.classList.add('hidden');
+        analysisTextSpan.textContent = '✨ دریافت تحلیل و پیشنهاد رشد';
+        analysisButton.disabled = false;
+    }
+    
+    // --- Initial Load ---
+    document.addEventListener('DOMContentLoaded', () => {
+        // Initial placeholder rendering before Firebase loads data
+        renderTasks(); 
+        updateJournalUI();
+    });
+
+</script>
+</body>
+</html>
